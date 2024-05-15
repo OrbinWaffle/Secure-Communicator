@@ -2,16 +2,24 @@
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.List;
 
 import javax.sound.midi.SysexMessage;
+import javax.xml.crypto.Data;
 
 public class Communicator {
     
@@ -105,25 +113,81 @@ public class Communicator {
 			return false;
 		}
 	}
+	public static byte[] objToByte(DP dataPacket)
+	{
+		try {
+			ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
+			ObjectOutputStream objStream = new ObjectOutputStream(byteStream);
+			objStream.writeObject(dataPacket);
+	
+			return byteStream.toByteArray();
+		} catch (Exception e) {
+			System.err.println(e);
+			return null;
+		}
+	}
 
-	public static void SendMessage()
+	public static DP byteToObj(byte[] bytes)
+	{
+		try {
+			ByteArrayInputStream byteStream = new ByteArrayInputStream(bytes);
+			ObjectInputStream objStream = new ObjectInputStream(byteStream);
+	
+			return (DP)objStream.readObject();
+		} catch (Exception e) {
+			System.err.println(e);
+			return null;
+		}
+	}
+
+	public static void SendMessage(String recipient)
 	{
 		Path currentRelativePath = Paths.get("");
+		String parent = currentRelativePath.toAbsolutePath().getParent().toString();
 		//String s = currentRelativePath.toAbsolutePath().toString();
 		//System.out.println(s);
         byte[] data = ReadFile("outbox.txt");
-		String parent = currentRelativePath.toAbsolutePath().getParent().toString();
+		byte[] aesKey = AES256.GenerateKey();
+
+		PublicKey recipeintPublicKey = RSA.readPublicKey(recipient);
+
+		byte[] encryptedData = AES256.encrypt(data, aesKey);
+
+		byte[] encryptedKey = RSA.Encrypt(aesKey, recipeintPublicKey);
+
+		DP packet = new DP(encryptedData, encryptedKey, encryptedKey);
+
+		byte[] packetBytes = objToByte(packet);
+		System.out.println(packetBytes);
 		//System.out.print(parent);
-		WriteFile(parent + "/public_channel.txt", data);
-		System.out.println(BytesToString(data));
+		WriteFile(parent + "/public_channel", packetBytes);
+		System.out.println("Output written to public channel.");
 	}
 	public static void ReceiveMessage()
 	{
 		Path currentRelativePath = Paths.get("");
 		String parent = currentRelativePath.toAbsolutePath().getParent().toString();
-        byte[] data = ReadFile(parent + "/public_channel.txt");
-		WriteFile("inbox.txt", data);
-		System.out.println(BytesToString(data));
+        byte[] packetBytes = ReadFile(parent + "/public_channel");
+
+		DP dataPacket = byteToObj(packetBytes);
+
+		byte[] encryptedData = dataPacket.GetMessage();
+		byte[] encryptedAESKey = dataPacket.GetAES();
+		byte[] MAC = dataPacket.GetMAC();
+
+		PrivateKey myKey = RSA.readPrivateKey();
+		byte[] decryptedAESKey = RSA.Decrypt(encryptedAESKey, myKey);
+
+		byte[] decryptedData = AES256.decrypt(encryptedData, decryptedAESKey);
+
+		WriteFile("inbox.txt", decryptedData);
+		System.out.println("Incoming message written to \"inbox.txt\".");
+	}
+
+	public static void GenerateKeys()
+	{
+		RSA.GenerateKeys();
+		System.out.println("Keys generated.");
 	}
 
 	// Driver code
@@ -132,11 +196,14 @@ public class Communicator {
 		String command = args[0];
 		switch (command) {
 			case "send":			
-				//String receiver = args[1];
-				SendMessage();
+				String receiver = args[1];
+				SendMessage(receiver);
 				break;
 			case "receive":
 				ReceiveMessage();
+				break;
+			case "generate":
+				GenerateKeys();
 				break;
 			default:
 				break;
